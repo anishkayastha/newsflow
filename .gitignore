@@ -1,0 +1,36 @@
+# Models — never commit (700 MB+)
+backend/models/
+*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env         # real secrets — never commit
+*.env
+
+# Lambda packaging artifacts
+backend/scraper/package/
+backend/scraper/scraper.zip
+backend/api/package/
+backend/api/api.zip
+backend/consumer/models/
+backend/models/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
