@@ -1,182 +1,172 @@
 # NewsFlow
 
-Event-driven news digest system. Ingests 190 RSS feeds every 30 minutes,
-clusters articles by event using Sentence-BERT + DBSCAN, scores each cluster
-by relevance/authority/recency, and generates one multi-source summary per
-event using DistilBART. Served as a ranked digest via React + Cognito auth.
+Event-driven news digest system.
+
+NewsFlow ingests 190 RSS feeds, clusters articles by real-world events using Sentence-BERT + DBSCAN, scores clusters by relevance/authority/recency, and generates a single multi-source summary per event using DistilBART.
+
+The result is a ranked, deduplicated news feed served via a serverless API and React frontend with Cognito authentication.
 
 ---
 
-## Project structure
+## Core Idea
 
-```
+This is not a summarizer.
+
+It is a cluster → score → summarize pipeline:
+- Multiple articles about the same event are grouped first
+- Then one high-quality summary is generated per event
+
+---
+
+## Architecture
+
+EventBridge (every 12 hours)
+    ↓
+Lambda: scraper
+    → fetch 190 RSS feeds
+    → push to SQS (batched)
+    ↓
+SQS (batch size: 10,000, window: 300s)
+    ↓
+Lambda: consumer (Docker)
+    → SBERT embeddings
+    → DBSCAN clustering
+    → scoring
+    → DistilBART summarization
+    → quality gate
+    → DynamoDB
+    ↓
+Lambda: API (plain Python)
+    → returns ranked digest
+    ↓
+API Gateway (HTTP API)
+    ↓
+React SPA (Vite + Amplify + Cognito)
+    ↓
+S3 + CloudFront
+
+---
+
+## Project Structure
+
 newsflow/
-├── Makefile                    ← all terminal commands live here
-├── config.mk.example           ← copy to config.mk and fill in your AWS values
-├── .gitignore
+├── Makefile
+├── config.mk.example
 │
 ├── backend/
 │   ├── scraper/
-│   │   ├── handler.py          ← Lambda: fetches 190 RSS feeds → SQS
-│   │   └── requirements.txt
-│   │
 │   ├── consumer/
-│   │   ├── handler.py          ← Lambda: embed → cluster → score → summarize → DynamoDB
-│   │   ├── Dockerfile          ← container image (needed for ML deps)
-│   │   └── requirements.txt
-│   │
 │   ├── api/
-│   │   ├── handler.py          ← Lambda: FastAPI serving digest from DynamoDB
-│   │   └── requirements.txt
-│   │
-│   └── scripts/
-│       └── download_and_package_models.py  ← run once locally before deploying
 │
 ├── frontend/
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── index.html
-│   ├── .env.example            ← copy to .env and fill in Cognito + API values
-│   └── src/
-│       ├── main.jsx            ← Amplify.configure + ReactDOM.createRoot
-│       ├── App.jsx             ← Cognito Authenticator wrapper
-│       ├── config.js           ← reads VITE_* env vars
-│       ├── index.css           ← design tokens + global styles
-│       ├── hooks/useDigest.js  ← fetch + auto-refresh every 30 min
-│       ├── utils/time.js       ← timeAgo(), topicClass()
-│       ├── components/
-│       │   ├── Header.jsx
-│       │   ├── CategoryFilter.jsx
-│       │   ├── DigestCard.jsx
-│       │   └── LoadingSkeleton.jsx
-│       └── pages/
-│           └── DigestPage.jsx  ← main page
-│
 └── docs/
-    └── AWS_CONSOLE_GUIDE.md    ← step-by-step AWS Console setup (13 steps)
-```
 
 ---
 
-## Quick start
+## Important Architectural Decisions
 
-### Step 0 — Prerequisites
-- Python 3.11, Node.js 18+, Docker (running), AWS CLI v2 configured
-- `aws configure` done with your IAM credentials
+- Models baked into Docker (no S3 download)
+- Plain Python API (no FastAPI)
+- Python 3.12 for compatibility
+- 12-hour schedule (cost optimization)
+- Large SQS batching required for clustering
+- Cognito SPA auth (no hosted UI)
+- CORS configured at API Gateway + Lambda
 
-### Step 1 — Clone and configure
+---
 
-```bash
-git clone <your-repo-url> newsflow
+## Quick Start
+
+### Prerequisites
+- Python 3.11+
+- Node.js 18+
+- Docker
+- AWS CLI configured
+
+### Setup
+
+git clone <your-repo>
 cd newsflow
 
-# Backend config
 cp config.mk.example config.mk
-# Open config.mk and fill in your AWS account ID, region, bucket names
-
-# Frontend config
 cp frontend/.env.example frontend/.env
-# Open frontend/.env and fill in Cognito + API Gateway values
-```
 
-### Step 2 — Install dependencies
+### Install
 
-```bash
 make setup
-```
 
-### Step 3 — Download ML models (one-time, ~700 MB)
+### Deploy Backend
 
-```bash
-make download-models
-# Produces: backend/models/sbert.tar.gz + backend/models/distilbart.tar.gz
-```
-
-### Step 4 — Set up AWS infrastructure (Console)
-
-Follow `docs/AWS_CONSOLE_GUIDE.md` steps 1–9:
-- S3 model bucket → upload the two .tar.gz files (`make upload-models`)
-- DynamoDB tables (nf-articles, nf-clusters, nf-summaries)
-- ECR repository
-- SQS queue
-- IAM roles
-- Lambda functions (scraper, consumer, api)
-- EventBridge schedule
-- SNS + CloudWatch alarms
-
-### Step 5 — Deploy backend
-
-```bash
-# First time — build everything from scratch
-make upload-models        # push model weights to S3
-make deploy-consumer      # build Docker image → push ECR → update Lambda
-make deploy-scraper       # zip → update Lambda
-make deploy-api           # zip → update Lambda
-
-# All subsequent code changes — one command
 make deploy-backend
-```
 
-### Step 6 — Test the pipeline
+### Test
 
-```bash
-make test-scraper         # invoke scraper manually + print result
-make logs-consumer        # tail consumer CloudWatch logs (watch it run)
-make logs-api             # tail API logs
-```
+make fresh-run
+make logs-consumer
 
-### Step 7 — Deploy frontend
+### Deploy Frontend
 
-```bash
-# Fill in frontend/.env first (Cognito + API Gateway URL)
-make deploy-frontend      # build → S3 sync → CloudFront invalidation
-```
+make deploy-frontend
 
 ---
 
-## Day-to-day commands
+## Key Parameters
 
-| Task | Command |
-|---|---|
-| Deploy everything after code changes | `make deploy-all` |
-| Deploy backend only | `make deploy-backend` |
-| Deploy frontend only | `make deploy-frontend` |
-| Trigger scraper manually | `make test-scraper` |
-| Watch consumer logs live | `make logs-consumer` |
-| Run frontend locally | `cd frontend && npm run dev` |
-| Clean build artifacts | `make clean` |
+- DBSCAN eps: 0.35
+- min samples: 2
+- scoring: 0.50 relevance / 0.25 authority / 0.25 recency
+- summary length: 20–200 words
 
 ---
 
-## AWS services used
+## Performance
 
-| Service | Role | Monthly cost |
-|---|---|---|
-| EventBridge | Triggers scraper every 30 min | $0 |
-| Lambda — scraper | Fetches 190 RSS feeds | $0 |
-| SQS | Article buffer between Lambdas | $0 |
-| Lambda — consumer | SBERT + DBSCAN + DistilBART | ~$3–5 |
-| Lambda — api | FastAPI digest endpoint | $0 |
-| S3 (models) | Stores 720 MB model weights | ~$0.02 |
-| S3 (frontend) | Hosts React build | ~$0 |
-| DynamoDB | Clusters + summaries storage | $0 |
-| ECR | Consumer Docker image | ~$0.40 |
-| CloudWatch + SNS | Metrics, alarms, email alerts | $0 |
-| Cognito | User auth (JWT) | $0 |
-| API Gateway | HTTP API endpoint | $0 |
-| CloudFront | CDN for React SPA | $0 |
-| **Total** | | **~$5–7 / month** |
+- ~3,600 articles processed
+- ~260 clusters
+- ~95% quality pass rate
 
 ---
 
-## Key pipeline parameters (from `backend/consumer/handler.py`)
+## Commands
 
-| Parameter | Value | Effect |
-|---|---|---|
-| `DBSCAN_EPS` | 0.35 | Articles with cosine distance > 0.35 are not grouped |
-| `DBSCAN_MIN_SAMPLES` | 2 | Minimum articles to form a cluster |
-| Scoring weights | 0.50 relevance + 0.25 authority + 0.25 recency | Cluster importance |
-| Quality gate min words | 20 | Summaries shorter than this are rejected |
-| Quality gate max words | 200 | Summaries longer than this are rejected |
-| SBERT model | all-mpnet-base-v2 | 768-dim embeddings, ~420 MB |
-| Summarizer | sshleifer/distilbart-cnn-6-6 | ~300 MB, CPU-safe |
+- make deploy-all
+- make deploy-backend
+- make deploy-frontend
+- make fresh-run
+- make logs-consumer
+
+---
+
+## Known Limitations
+
+- Duplicate clusters across batches
+- Cold start ~2–4 min
+- No global deduplication
+
+---
+
+## Planned Improvements
+
+- S3 staging for global clustering
+- Step Functions orchestration
+- Better deduplication
+
+---
+
+## Cost
+
+~$5–7/month
+
+---
+
+## Status
+
+Backend: working  
+API: working  
+Frontend: deploying  
+
+---
+
+## License
+
+MIT
