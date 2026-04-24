@@ -15,6 +15,7 @@
 AWS_ACCOUNT_ID   ?= YOUR_ACCOUNT_ID
 AWS_REGION       ?= ap-southeast-1
 MODEL_BUCKET     ?= newsflow-models-$(AWS_ACCOUNT_ID)
+PIPELINE_BUCKET  ?= newsflow-pipeline-$(AWS_ACCOUNT_ID)
 FRONTEND_BUCKET  ?= newsflow-frontend-$(AWS_ACCOUNT_ID)
 CLOUDFRONT_ID    ?= YOUR_CLOUDFRONT_DISTRIBUTION_ID
 ECR_REPO         ?= $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/newsflow-consumer
@@ -30,7 +31,7 @@ FN_API      ?= newsflow-api
         deploy-scraper deploy-api deploy-consumer deploy-backend \
         build-frontend deploy-frontend \
         deploy-all logs-scraper logs-consumer logs-api \
-        test-scraper clean
+        test-scraper check-pipeline fresh-run clean
 
 # ─────────────────────────────────────────────────────────────────────────────
 help:
@@ -62,7 +63,9 @@ help:
 	@echo "    deploy-all        deploy-backend + deploy-frontend"
 	@echo ""
 	@echo "  DEBUG"
-	@echo "    test-scraper      Invoke scraper Lambda manually and print result"
+	@echo "    test-scraper      Invoke scraper async + tail logs (Ctrl+C to stop)"
+	@echo "    check-pipeline    List latest articles files in S3 pipeline bucket"
+	@echo "    fresh-run         Trigger scraper + watch consumer process articles"
 	@echo "    logs-scraper      Tail scraper CloudWatch logs"
 	@echo "    logs-consumer     Tail consumer CloudWatch logs"
 	@echo "    logs-api          Tail api CloudWatch logs"
@@ -215,7 +218,7 @@ deploy-all: deploy-backend deploy-frontend
 # ─────────────────────────────────────────────────────────────────────────────
 
 test-scraper:
-	@echo "→ Invoking $(FN_SCRAPER) manually..."
+	@echo "→ Invoking $(FN_SCRAPER) asynchronously..."
 	aws lambda invoke \
 	  --function-name $(FN_SCRAPER) \
 	  --region $(AWS_REGION) \
@@ -223,8 +226,28 @@ test-scraper:
 	  --payload '{}' \
 	  --cli-binary-format raw-in-base64-out \
 	  /tmp/scraper-response.json
-	@echo "→ Scraper invoked — tailing logs (Ctrl+C to stop)..."
-	aws logs tail /aws/lambda/$(FN_SCRAPER) --follow --region $(AWS_REGION)
+	@echo "✓ Scraper triggered — tailing logs (Ctrl+C to stop)..."
+	aws logs tail /aws/lambda/$(FN_SCRAPER) \
+	  --follow \
+	  --region $(AWS_REGION)
+
+check-pipeline:
+	@echo "→ Latest articles files in s3://$(PIPELINE_BUCKET)/pipeline/"
+	aws s3 ls s3://$(PIPELINE_BUCKET)/pipeline/ \
+	  --region $(AWS_REGION) \
+	  | sort | tail -5
+
+fresh-run:
+	@echo "→ Triggering scraper — articles will be written to S3..."
+	aws lambda invoke \
+	  --function-name $(FN_SCRAPER) \
+	  --region $(AWS_REGION) \
+	  --invocation-type Event \
+	  --payload '{}' \
+	  --cli-binary-format raw-in-base64-out \
+	  /tmp/scraper-response.json
+	@echo "✓ Scraper triggered. Consumer fires automatically when S3 file is written."
+	@echo "  Run 'make logs-consumer' to watch the pipeline run."
 
 logs-scraper:
 	aws logs tail /aws/lambda/$(FN_SCRAPER) --follow --region $(AWS_REGION)
@@ -234,29 +257,6 @@ logs-consumer:
 
 logs-api:
 	aws logs tail /aws/lambda/$(FN_API) --follow --region $(AWS_REGION)
-
-purge-sqs:
-	@echo "→ Purging SQS queue..."
-	aws sqs purge-queue \
-	  --queue-url $(SQS_URL) \
-	  --region $(AWS_REGION)
-	@echo "✓ Queue purged"
-
-fresh-run:
-	@echo "→ Starting fresh pipeline run..."
-	aws sqs purge-queue \
-	  --queue-url $(SQS_URL) \
-	  --region $(AWS_REGION)
-	@echo "✓ SQS purged — waiting 60 seconds before triggering scraper..."
-	sleep 60
-	aws lambda invoke \
-	  --function-name $(FN_SCRAPER) \
-	  --region $(AWS_REGION) \
-	  --invocation-type Event \
-	  --payload '{}' \
-	  --cli-binary-format raw-in-base64-out \
-	  /tmp/scraper-response.json
-	@echo "✓ Scraper triggered — run 'make logs-consumer' to watch progress"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLEAN

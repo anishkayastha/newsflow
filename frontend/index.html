@@ -6,8 +6,16 @@
     <title>NewsFlow</title>
     <meta name="description" content="Event-driven news digest — one summary per event, ranked by relevance." />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📰</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,300;1,9..144,400&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
   </head>
   <body>
+    <script>
+      // Apply saved theme before React loads to prevent flash
+      const t = localStorage.getItem('newsflow_theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

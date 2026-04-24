@@ -9,6 +9,7 @@ export AWS_REGION       = ap-southeast-1
 
 # S3 buckets (created in AWS Console step 1 and frontend setup)
 export MODEL_BUCKET     = newsflow-models-181053172023
+export PIPELINE_BUCKET  = newsflow-pipeline-181053172023
 export FRONTEND_BUCKET  = newsflow-frontend-181053172023
 
 # CloudFront distribution ID (Console → CloudFront → your distribution)

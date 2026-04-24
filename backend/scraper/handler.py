@@ -1,8 +1,8 @@
 import json, os, re, hashlib, feedparser, boto3
 from datetime import datetime, timezone
 
-SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL', '')
-sqs = boto3.client('sqs')
+PIPELINE_BUCKET = os.environ.get('PIPELINE_BUCKET', '')
+s3  = boto3.client('s3')
 cw  = boto3.client('cloudwatch')
 
 MAX_ARTICLES_PER_FEED = 25
@@ -260,6 +260,7 @@ def lambda_handler(event, context):
                     'published': published,
                     'ingested_at': datetime.now(timezone.utc).isoformat(),
                     'authority': AUTHORITY.get(source_name, 0.50),
+                    'article_url': getattr(entry, 'link', '') or '',
                 })
                 count += 1
             if count > 0:
@@ -274,17 +275,22 @@ def lambda_handler(event, context):
         ])
         return {'status': 'error', 'reason': 'empty_batch'}
 
-    # Push to SQS in batches of 10
-    for i in range(0, len(articles), 10):
-        batch = articles[i:i+10]
-        sqs.send_message_batch(
-            QueueUrl=SQS_QUEUE_URL,
-            Entries=[{'Id': str(j), 'MessageBody': json.dumps(a)} for j, a in enumerate(batch)]
-        )
+    # Write ALL articles as a single S3 object so consumer sees the full dataset.
+    # This guarantees one Lambda invocation → one DBSCAN run → no duplicate clusters.
+    timestamp  = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    s3_key     = f'pipeline/articles-{timestamp}.json'
+    body_bytes = json.dumps({'articles': articles, 'ingested_at': timestamp}).encode('utf-8')
+
+    s3.put_object(
+        Bucket      = PIPELINE_BUCKET,
+        Key         = s3_key,
+        Body        = body_bytes,
+        ContentType = 'application/json',
+    )
+    print(f'[OK] {len(articles)} articles from {feed_ok}/{len(RSS_FEEDS)} feeds → s3://{PIPELINE_BUCKET}/{s3_key}')
 
     cw.put_metric_data(Namespace='NewsFlow', MetricData=[
         {'MetricName': 'ArticlesIngested', 'Value': len(articles), 'Unit': 'Count'},
         {'MetricName': 'FeedsActive',      'Value': feed_ok,       'Unit': 'Count'},
     ])
-    print(f'[OK] {len(articles)} articles from {feed_ok}/{len(RSS_FEEDS)} feeds')
-    return {'status': 'ok', 'articles': len(articles), 'feeds_ok': feed_ok}
+    return {'status': 'ok', 'articles': len(articles), 'feeds_ok': feed_ok, 's3_key': s3_key}
